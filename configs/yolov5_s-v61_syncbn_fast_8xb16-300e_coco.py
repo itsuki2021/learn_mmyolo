@@ -1,35 +1,10 @@
-default_scope = 'mmyolo'
-default_hooks = dict(
-    timer=dict(type='IterTimerHook'),
-    logger=dict(type='LoggerHook', interval=50),
-    param_scheduler=dict(
-        type='YOLOv5ParamSchedulerHook',
-        scheduler_type='linear',
-        lr_factor=0.01,
-        max_epochs=300),
-    checkpoint=dict(
-        type='CheckpointHook', interval=10, save_best='auto',
-        max_keep_ckpts=3),
-    sampler_seed=dict(type='DistSamplerSeedHook'),
-    visualization=dict(type='mmdet.DetVisualizationHook'))
-env_cfg = dict(
-    cudnn_benchmark=True,
-    mp_cfg=dict(mp_start_method='fork', opencv_num_threads=0),
-    dist_cfg=dict(backend='nccl'))
-vis_backends = [dict(type='LocalVisBackend')]
-visualizer = dict(
-    type='mmdet.DetLocalVisualizer',
-    vis_backends=[dict(type='LocalVisBackend')],
-    name='visualizer')
-log_processor = dict(type='LogProcessor', window_size=50, by_epoch=True)
-log_level = 'INFO'
-load_from = None
-resume = False
-file_client_args = dict(backend='disk')
+# dataset settings
 data_root = 'data/coco/'
 dataset_type = 'YOLOv5CocoDataset'
+
+# parameters that often need to be modified
 num_classes = 80
-img_scale = (640, 640)
+img_scale = (640, 640)  # height width
 deepen_factor = 0.33
 widen_factor = 0.5
 max_epochs = 300
@@ -38,18 +13,62 @@ train_batch_size_per_gpu = 16
 train_num_workers = 8
 val_batch_size_per_gpu = 1
 val_num_workers = 2
-persistent_workers = True
+persistent_workers = True   # persistent_workers must be False if num_workers is 0.
 base_lr = 0.01
+
+default_scope = 'mmyolo'
+
+default_hooks = dict(
+    timer=dict(type='IterTimerHook'),
+    logger=dict(type='LoggerHook', interval=50),
+    param_scheduler=dict(
+        type='YOLOv5ParamSchedulerHook',
+        scheduler_type='linear',
+        lr_factor=0.01,
+        max_epochs=max_epochs),
+    checkpoint=dict(
+        type='CheckpointHook',
+        interval=save_epoch_intervals,
+        save_best='auto',
+        max_keep_ckpts=3),
+    sampler_seed=dict(type='DistSamplerSeedHook'),
+    visualization=dict(type='mmdet.DetVisualizationHook'))
+
+# single-scale training is recommended to
+# be turned on, which can speed up training.
+env_cfg = dict(
+    cudnn_benchmark=True,
+    mp_cfg=dict(mp_start_method='fork', opencv_num_threads=0),
+    dist_cfg=dict(backend='nccl'))
+
+vis_backends = [dict(type='LocalVisBackend')]
+visualizer = dict(
+    type='mmdet.DetLocalVisualizer',
+    vis_backends=vis_backends,
+    name='visualizer')
+log_processor = dict(type='LogProcessor', window_size=50, by_epoch=True)
+
+log_level = 'INFO'
+load_from = None
+resume = False
+
+file_client_args = dict(backend='disk')
+
+# only on Val
 batch_shapes_cfg = dict(
     type='BatchShapePolicy',
-    batch_size=1,
-    img_size=640,
+    batch_size=val_batch_size_per_gpu,
+    img_size=img_scale[0],
     size_divisor=32,
     extra_pad_ratio=0.5)
-anchors = [[(10, 13), (16, 30), (33, 23)], [(30, 61), (62, 45), (59, 119)],
-           [(116, 90), (156, 198), (373, 326)]]
+
+anchors = [
+    [(10, 13), (16, 30), (33, 23)],         # P3/8
+    [(30, 61), (62, 45), (59, 119)],        # P4/16
+    [(116, 90), (156, 198), (373, 326)]]    # P5/32
 strides = [8, 16, 32]
 num_det_layers = 3
+
 model = dict(
     type='YOLODetector',
     data_preprocessor=dict(
@@ -59,14 +78,14 @@ model = dict(
         bgr_to_rgb=True),
     backbone=dict(
         type='YOLOv5CSPDarknet',
-        deepen_factor=0.33,
-        widen_factor=0.5,
+        deepen_factor=deepen_factor,
+        widen_factor=widen_factor,
         norm_cfg=dict(type='BN', momentum=0.03, eps=0.001),
         act_cfg=dict(type='SiLU', inplace=True)),
     neck=dict(
         type='YOLOv5PAFPN',
-        deepen_factor=0.33,
-        widen_factor=0.5,
+        deepen_factor=deepen_factor,
+        widen_factor=widen_factor,
         in_channels=[256, 512, 1024],
         out_channels=[256, 512, 1024],
         num_csp_blocks=3,
@@ -76,35 +95,33 @@ model = dict(
         type='YOLOv5Head',
         head_module=dict(
             type='YOLOv5HeadModule',
-            num_classes=80,
+            num_classes=num_classes,
             in_channels=[256, 512, 1024],
-            widen_factor=0.5,
-            featmap_strides=[8, 16, 32],
+            widen_factor=widen_factor,
+            featmap_strides=strides,
             num_base_priors=3),
         prior_generator=dict(
             type='mmdet.YOLOAnchorGenerator',
-            base_sizes=[[(10, 13), (16, 30), (33, 23)],
-                        [(30, 61), (62, 45), (59, 119)],
-                        [(116, 90), (156, 198), (373, 326)]],
-            strides=[8, 16, 32]),
+            base_sizes=anchors,
+            strides=strides),
         loss_cls=dict(
             type='mmdet.CrossEntropyLoss',
             use_sigmoid=True,
             reduction='mean',
-            loss_weight=0.5),
+            loss_weight=0.5 * (num_classes / 80 * 3 / num_det_layers)),
         loss_bbox=dict(
             type='IoULoss',
             iou_mode='ciou',
             bbox_format='xywh',
             eps=1e-07,
             reduction='mean',
-            loss_weight=0.05,
+            loss_weight=0.05 * (3 / num_det_layers),
             return_iou=True),
         loss_obj=dict(
             type='mmdet.CrossEntropyLoss',
             use_sigmoid=True,
             reduction='mean',
-            loss_weight=1.0),
+            loss_weight=1.0 * ((img_scale[0] / 640)**2 * 3 / num_det_layers)),
         prior_match_thr=4.0,
         obj_level_weights=[4.0, 1.0, 0.4]),
     test_cfg=dict(
@@ -113,44 +130,36 @@ model = dict(
         score_thr=0.001,
         nms=dict(type='nms', iou_threshold=0.65),
         max_per_img=300))
+
 albu_train_transforms = [
     dict(type='Blur', p=0.01),
     dict(type='MedianBlur', p=0.01),
     dict(type='ToGray', p=0.01),
     dict(type='CLAHE', p=0.01)
 ]
+
 pre_transform = [
-    dict(type='LoadImageFromFile', file_client_args=dict(backend='disk')),
+    dict(type='LoadImageFromFile', file_client_args=file_client_args),
     dict(type='LoadAnnotations', with_bbox=True)
 ]
+
 train_pipeline = [
-    dict(type='LoadImageFromFile', file_client_args=dict(backend='disk')),
-    dict(type='LoadAnnotations', with_bbox=True),
+    *pre_transform,
     dict(
         type='Mosaic',
-        img_scale=(640, 640),
+        img_scale=img_scale,
         pad_val=114.0,
-        pre_transform=[
-            dict(
-                type='LoadImageFromFile',
-                file_client_args=dict(backend='disk')),
-            dict(type='LoadAnnotations', with_bbox=True)
-        ]),
+        pre_transform=pre_transform),
     dict(
         type='YOLOv5RandomAffine',
         max_rotate_degree=0.0,
         max_shear_degree=0.0,
         scaling_ratio_range=(0.5, 1.5),
-        border=(-320, -320),
+        border=(-img_scale[0] // 2, -img_scale[1] // 2),
         border_val=(114, 114, 114)),
     dict(
         type='mmdet.Albu',
-        transforms=[
-            dict(type='Blur', p=0.01),
-            dict(type='MedianBlur', p=0.01),
-            dict(type='ToGray', p=0.01),
-            dict(type='CLAHE', p=0.01)
-        ],
+        transforms=albu_train_transforms,
         bbox_params=dict(
             type='BboxParams',
             format='pascal_voc',
@@ -163,67 +172,28 @@ train_pipeline = [
         meta_keys=('img_id', 'img_path', 'ori_shape', 'img_shape', 'flip',
                    'flip_direction'))
 ]
+
 train_dataloader = dict(
-    batch_size=16,
-    num_workers=8,
-    persistent_workers=True,
+    batch_size=train_batch_size_per_gpu,
+    num_workers=train_num_workers,
+    persistent_workers=persistent_workers,
     pin_memory=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
     dataset=dict(
-        type='YOLOv5CocoDataset',
-        data_root='data/coco/',
+        type=dataset_type,
+        data_root=data_root,
         ann_file='annotations/instances_train2017.json',
         data_prefix=dict(img='train2017/'),
         filter_cfg=dict(filter_empty_gt=False, min_size=32),
-        pipeline=[
-            dict(
-                type='LoadImageFromFile',
-                file_client_args=dict(backend='disk')),
-            dict(type='LoadAnnotations', with_bbox=True),
-            dict(
-                type='Mosaic',
-                img_scale=(640, 640),
-                pad_val=114.0,
-                pre_transform=[
-                    dict(
-                        type='LoadImageFromFile',
-                        file_client_args=dict(backend='disk')),
-                    dict(type='LoadAnnotations', with_bbox=True)
-                ]),
-            dict(
-                type='YOLOv5RandomAffine',
-                max_rotate_degree=0.0,
-                max_shear_degree=0.0,
-                scaling_ratio_range=(0.5, 1.5),
-                border=(-320, -320),
-                border_val=(114, 114, 114)),
-            dict(
-                type='mmdet.Albu',
-                transforms=[
-                    dict(type='Blur', p=0.01),
-                    dict(type='MedianBlur', p=0.01),
-                    dict(type='ToGray', p=0.01),
-                    dict(type='CLAHE', p=0.01)
-                ],
-                bbox_params=dict(
-                    type='BboxParams',
-                    format='pascal_voc',
-                    label_fields=['gt_bboxes_labels', 'gt_ignore_flags']),
-                keymap=dict(img='image', gt_bboxes='bboxes')),
-            dict(type='YOLOv5HSVRandomAug'),
-            dict(type='mmdet.RandomFlip', prob=0.5),
-            dict(
-                type='mmdet.PackDetInputs',
-                meta_keys=('img_id', 'img_path', 'ori_shape', 'img_shape',
-                           'flip', 'flip_direction'))
-        ]),
+        pipeline=train_pipeline),
     collate_fn=dict(type='yolov5_collate'))
+
 test_pipeline = [
-    dict(type='LoadImageFromFile', file_client_args=dict(backend='disk')),
-    dict(type='YOLOv5KeepRatioResize', scale=(640, 640)),
+    dict(type='LoadImageFromFile', file_client_args=file_client_args),
+    dict(type='YOLOv5KeepRatioResize', scale=img_scale),
     dict(
         type='LetterResize',
-        scale=(640, 640),
+        scale=img_scale,
         allow_scale_up=False,
         pad_val=dict(img=114)),
     dict(type='LoadAnnotations', with_bbox=True, _scope_='mmdet'),
@@ -232,87 +202,37 @@ test_pipeline = [
         meta_keys=('img_id', 'img_path', 'ori_shape', 'img_shape',
                    'scale_factor', 'pad_param'))
 ]
+
 val_dataloader = dict(
-    batch_size=1,
-    num_workers=2,
-    persistent_workers=True,
+    batch_size=val_batch_size_per_gpu,
+    num_workers=val_num_workers,
+    persistent_workers=persistent_workers,
     pin_memory=True,
     drop_last=False,
     sampler=dict(type='DefaultSampler', shuffle=False),
     dataset=dict(
-        type='YOLOv5CocoDataset',
-        data_root='data/coco/',
+        type=dataset_type,
+        data_root=data_root,
         test_mode=True,
         data_prefix=dict(img='val2017/'),
         ann_file='annotations/instances_val2017.json',
-        pipeline=[
-            dict(
-                type='LoadImageFromFile',
-                file_client_args=dict(backend='disk')),
-            dict(type='YOLOv5KeepRatioResize', scale=(640, 640)),
-            dict(
-                type='LetterResize',
-                scale=(640, 640),
-                allow_scale_up=False,
-                pad_val=dict(img=114)),
-            dict(type='LoadAnnotations', with_bbox=True, _scope_='mmdet'),
-            dict(
-                type='mmdet.PackDetInputs',
-                meta_keys=('img_id', 'img_path', 'ori_shape', 'img_shape',
-                           'scale_factor', 'pad_param'))
-        ],
-        batch_shapes_cfg=dict(
-            type='BatchShapePolicy',
-            batch_size=1,
-            img_size=640,
-            size_divisor=32,
-            extra_pad_ratio=0.5)))
-test_dataloader = dict(
-    batch_size=1,
-    num_workers=2,
-    persistent_workers=True,
-    pin_memory=True,
-    drop_last=False,
-    sampler=dict(type='DefaultSampler', shuffle=False),
-    dataset=dict(
-        type='YOLOv5CocoDataset',
-        data_root='data/coco/',
-        test_mode=True,
-        data_prefix=dict(img='val2017/'),
-        ann_file='annotations/instances_val2017.json',
-        pipeline=[
-            dict(
-                type='LoadImageFromFile',
-                file_client_args=dict(backend='disk')),
-            dict(type='YOLOv5KeepRatioResize', scale=(640, 640)),
-            dict(
-                type='LetterResize',
-                scale=(640, 640),
-                allow_scale_up=False,
-                pad_val=dict(img=114)),
-            dict(type='LoadAnnotations', with_bbox=True, _scope_='mmdet'),
-            dict(
-                type='mmdet.PackDetInputs',
-                meta_keys=('img_id', 'img_path', 'ori_shape', 'img_shape',
-                           'scale_factor', 'pad_param'))
-        ],
-        batch_shapes_cfg=dict(
-            type='BatchShapePolicy',
-            batch_size=1,
-            img_size=640,
-            size_divisor=32,
-            extra_pad_ratio=0.5)))
+        pipeline=test_pipeline,
+        batch_shapes_cfg=batch_shapes_cfg))
+
+test_dataloader = val_dataloader
+
 param_scheduler = None
 optim_wrapper = dict(
     type='OptimWrapper',
     optimizer=dict(
         type='SGD',
-        lr=0.01,
+        lr=base_lr,
         momentum=0.937,
         weight_decay=0.0005,
         nesterov=True,
-        batch_size_per_gpu=16),
+        batch_size_per_gpu=train_batch_size_per_gpu),
     constructor='YOLOv5OptimizerConstructor')
+
 custom_hooks = [
     dict(
         type='EMAHook',
@@ -322,16 +242,17 @@ custom_hooks = [
         strict_load=False,
         priority=49)
 ]
+
 val_evaluator = dict(
     type='mmdet.CocoMetric',
     proposal_nums=(100, 1, 10),
-    ann_file='data/coco/annotations/instances_val2017.json',
+    ann_file=data_root + 'annotations/instances_val2017.json',
     metric='bbox')
-test_evaluator = dict(
-    type='mmdet.CocoMetric',
-    proposal_nums=(100, 1, 10),
-    ann_file='data/coco/annotations/instances_val2017.json',
-    metric='bbox')
-train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=300, val_interval=10)
+test_evaluator = val_evaluator
+
+train_cfg = dict(
+    type='EpochBasedTrainLoop',
+    max_epochs=max_epochs,
+    val_interval=save_epoch_intervals)
 val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
