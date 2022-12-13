@@ -24,22 +24,27 @@ RUN rm /etc/apt/sources.list.d/cuda.list \
     && apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu1804/x86_64/7fa2af80.pub
 
 RUN apt-get update \
-    && apt-get install -y ffmpeg libsm6 libxext6 git ninja-build libglib2.0-0 libxrender-dev \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y ffmpeg libsm6 libxext6 git ninja-build libglib2.0-0 libxrender-dev
 
 ### timezone
-RUN apt-get install tzdata && ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt-get install -y tzdata && ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
 
-# Install MMEngine , MMCV and MMDet
+### opencv
+RUN pip install opencv-python==4.5.5.64
+
+### Install MMEngine , MMCV and MMDet
 RUN pip install --no-cache-dir openmim && \
     mim install --no-cache-dir "mmengine>=0.3.1" "mmcv>=2.0.0rc1,<2.1.0" "mmdet>=3.0.0rc3,<3.1.0"
 
-# Use MMYOLO as a dependency or third-party package, install it with MIM
+### Use MMYOLO as a dependency or third-party package, install it with MIM
 RUN mim install --no-cache-dir "mmyolo"
 
-# Albumentation
+### Albumentation
 RUN pip install albumentations --no-binary qudida,albumentations
+
+### nvitop for GPU watching
+RUN pip install nvitop
 
 ### clean all cache
 RUN pip cache purge && rm -rf /var/lib/apt/lists/* && apt-get clean
