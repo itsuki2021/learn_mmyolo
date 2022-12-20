@@ -538,6 +538,7 @@ class CocoDataset(BaseDetDataset):
 * 骨干网络`YOLOv5CSPDarknet`
 
 UML:
+
 ![](resources/mmyolo.models.backbones.csp_darknet.png)
 
 关键源码:
@@ -643,6 +644,7 @@ class YOLOv5CSPDarknet(BaseBackbone):
 * 颈部网络`YOLOv5PAFPN`
 
 UML:
+
 ![](resources/mmyolo.models.necks.yolov5_pafpn.png)
 
 关键源码:
@@ -652,13 +654,13 @@ reduce_layer      仅改变channels
 upsample_layer    增加空间size
 downsample_layer  减少空间size
 
-backbone_out_1    ->  top_down_1    ->  bottom_up_3   ->  neck_out_3
+backbone_out_1    ->  top_down_1    ->  bottom_up_3   ->  neck_out_1
                             |               ^
                             v               |
 backbone_out_2    ->  top_down_2    ->  bottom_up_2   ->  neck_out_2
                             |               ^
                             v               |
-backbone_out_3    ->  top_down_3    ->  bottom_up_1   ->  neck_out_1
+backbone_out_3    ->  top_down_3    ->  bottom_up_1   ->  neck_out_3
 """
 class BaseYOLONeck(BaseModule, metaclass=ABCMeta):
     def __init__(self, ...):
@@ -755,13 +757,32 @@ class YOLOv5PAFPN(BaseYOLONeck):
 * 输出头`YOLOv5Head`
 
 UML:
+
 ![](resources/mmyolo.models.dense_heads.yolov5_head.png)
 
+推理与后处理流程:
+
+<div style="text-align: center;"><img src="https://user-images.githubusercontent.com/17425982/192942249-96b0fcfb-059f-48fe-862f-7d526a3a06d7.png" width="80%" alt=""></div>
+
+正负样本匹配与loss计算:
+
+<div style="text-align: center;"><img src="https://user-images.githubusercontent.com/40284075/190547195-60d6cd7a-b12a-4c6f-9cc8-13f48c8ab1e0.png" width="80%" alt=""></div>
+
+<div style="text-align: center;"><img src="https://user-images.githubusercontent.com/40284075/190549613-eb47e70a-a2c1-4729-9fb7-f5ce7007842b.png" width="80%" alt=""></div>
+
+```python
+Loss = lambda1*loss_cls + lambda2*loss_obj + lambda3*loss_loc
+```
+
 关键源码:
+
 ```python
 """
 非解耦型输出头, 分类和 bbox 检测等都是在同一个卷积的不同通道中完成
 """
+import torch
+
+
 class YOLOv5Head(BaseDenseHead):
     """
     主要方法:
@@ -772,13 +793,13 @@ class YOLOv5Head(BaseDenseHead):
     3. loss_and_predict()，等同于同时求loss和检测结果
         loss_and_predict(): forward() -> loss_by_feat() -> predict_by_feat()
     """
-    
+
     def __init__(self):
         ...
-    
+
     def forward(self, x: Tuple[Tensor]) -> Tuple[List]:
         ...
-    
+
     def predict_by_feat(self,
                         cls_scores: List[Tensor],
                         bbox_preds: List[Tensor],
@@ -798,11 +819,11 @@ class YOLOv5Head(BaseDenseHead):
         """
         # 根据feature size计算先验框和步长
         mlvl_priors = self.prior_generator.grid_priors(featmap_sizes, ...)
-        mlvl_strides = ...
-        
+        mlvl_strides = compute_strides(featmap_sizes, featmap_strides, ...)
+
         # 预测目标框解码
-        decoded_bboxes = self.bbox_coder.decode(...)
-        
+        decoded_bboxes = self.bbox_coder.decode(mlvl_priors, bbox_preds, mlvl_strides)
+
         results_list = []
         for (bboxes, scores, objectness, img_meta) in zip(decoded_bboxes, cls_scores, objectnesses, batch_img_metas):
             # 过滤低置信度预测
@@ -810,31 +831,66 @@ class YOLOv5Head(BaseDenseHead):
             bboxes = bboxes[conf_inds, :]
             scores = scores[conf_inds, :]
             objectness = objectness[conf_inds]
-            
+            ...
+
             # NMS, rescale等后续处理
             results = InstanceData(...)
             results = self._bbox_post_process(results, ...)
             results_list.append(results)
-        
+
         return results_list
 
     def loss_by_feat(
-        self,
-        cls_scores: Sequence[Tensor],
-        bbox_preds: Sequence[Tensor],
-        objectnesses: Sequence[Tensor],
-        batch_gt_instances: Sequence[InstanceData],
-        batch_img_metas: Sequence[dict],
-        batch_gt_instances_ignore: OptInstanceList = None) -> dict:
+            self,
+            cls_scores: Sequence[Tensor],
+            bbox_preds: Sequence[Tensor],
+            objectnesses: Sequence[Tensor],
+            batch_gt_instances: Sequence[InstanceData],
+            batch_img_metas: Sequence[dict],
+            batch_gt_instances_ignore: OptInstanceList = None) -> dict:
         """ ground truth编码 + 计算loss """
-        # bbox编码，先验框激活等
+        # 1. xyxy -> 归一化xywh
         batch_targets_normed = self._convert_gt_to_norm_format(
             batch_gt_instances, batch_img_metas)
-        # 太TM复杂了......
-                
 
-```
+        loss_cls = ...
+        loss_box = ...
+        loss_obj = ...
+        for i in range(self.num_levels):
+            # gt xywh 从 0-1 转为 0-特征图大小
+            batch_target_scaled = batch_targets_normed * scaled_factor
+
+            # 2. 形状 (长宽比) 匹配, 过滤掉与本层anchor不匹配的gt
+            wh_ratio = batch_target_scaled[..., 4:6] / priors_base_sizes_i[:, None]
+            match_ids = max(wh_ratio, 1 / wh_ratio) < self.prior_match_thr
+            batch_target_scaled = batch_target_scaled[match_ids]
+
+            # 3. 根据gt中心点落在哪个象限，再添加邻接网格
+            left, up, right, bottom = ...
+            offset_inds = torch.stack((torch.ones_like(left), left, up, right, bottom))
+            # 在特定位置重复gt框，等效于将邻接的预测网格也标记为正样本，计入loss计算
+            batch_targets_scaled = batch_targets_scaled.repeat(
+                            (5, 1, 1))[offset_inds]
+            img_class_inds, grid_xy, grid_wh, priors_inds = batch_targets_scaled.chunk(4, 1)
+            bboxes_target = torch.cat((grid_xy - grid_xy_long, grid_wh), 1)
+
+            # 4. 计算bbox loss, obj loss, cls loss
+            loss_box_i = self.loss_bbox(decoded_bbox_pred, bboxes_target)
+            loss_obj_i = self.loss_obj(objectnesses[i], target_obj)
+            loss_cls_i = self.loss_cls(pred_cls_scores, target_class)
+            ...
+        
+        return dict(loss_cls=..., loss_obj=..., loss_bbox=...)
+```         
 
 ### (4) 训练trick
 
-### (5) 推理和后处理
+weight decay, 梯度累加, 指数平滑, AMP混合精度等。
+
+## 4.2 YOLOV6原理和实现
+
+闲了再看
+
+## 4.3 YOLOV7原理和实现
+
+闲了再看
