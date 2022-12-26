@@ -2,7 +2,7 @@ import os.path as osp
 from typing import Union, List
 
 from mmdet.datasets import CocoDataset
-from mmyolo.datasets import BatchShapePolicy
+from mmyolo.datasets.yolov5_coco import BatchShapePolicyDataset
 from mmalpha.registry import DATASETS
 
 
@@ -74,7 +74,7 @@ class CocoKeyPointDataset(CocoDataset):
 
 
 @DATASETS.register_module()
-class YOLOv5CocoKeyPointDataset(BatchShapePolicy, CocoKeyPointDataset):
+class YOLOv5CocoKeyPointDataset(BatchShapePolicyDataset, CocoKeyPointDataset):
     """Dataset for YOLOv5 COCO Dataset.
 
     Only add 'BatchShapePolicy' function compared with CocoKeyPointDataset.
