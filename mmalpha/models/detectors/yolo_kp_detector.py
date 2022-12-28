@@ -1,9 +1,5 @@
-import torch
 from mmdet.models.detectors.single_stage import SingleStageDetector
 from mmdet.utils import ConfigType, OptConfigType, OptMultiConfig
-from mmengine.dist import get_world_size
-from mmengine.logging import print_log
-
 from mmalpha.registry import MODELS
 
 
@@ -45,8 +41,3 @@ class YOLOKeyPointDetector(SingleStageDetector):
             test_cfg=test_cfg,
             data_preprocessor=data_preprocessor,
             init_cfg=init_cfg)
-
-        # TODO： Waiting for mmengine support
-        if use_syncbn and get_world_size() > 1:
-            torch.nn.SyncBatchNorm.convert_sync_batchnorm(self)
-            print_log('Using SyncBatchNorm()', 'current')
